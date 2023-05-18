@@ -90,6 +90,7 @@ fn parse_mime(extension: &str) -> &'static str {
   return match extension {
     "html" => "text/html",
     "ico" => "image/png",
+    "png" => "image/png",
     _ => todo!(),
   };
 }
