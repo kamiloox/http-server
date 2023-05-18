@@ -2,7 +2,7 @@ use std::{
   fs::File,
   io::{BufRead, BufReader, Read, Write},
   net::{TcpListener, TcpStream},
-  str::from_utf8,
+  path::Path,
 };
 
 fn main() {
@@ -41,7 +41,8 @@ fn handle_connection(mut stream: TcpStream) {
     }),
   };
 
-  stream.write_all(response.as_bytes()).unwrap();
+  stream.write_all(&response).unwrap();
+  stream.flush().unwrap();
 }
 
 #[derive(Debug)]
@@ -66,8 +67,8 @@ fn parse_mime(extension: &str) -> &'static str {
   };
 }
 
-fn prepare_response(response: Response) -> String {
-  let mut parsed = format!(concat!("HTTP/1.1 {} {}\n"), response.code, response.status);
+fn prepare_response(response: Response) -> Vec<u8> {
+  let start_line = format!(concat!("HTTP/1.1 {} {}\n"), response.code, response.status);
 
   if let Some(ReadFile {
     buffer,
@@ -75,31 +76,37 @@ fn prepare_response(response: Response) -> String {
     extension,
   }) = response.file
   {
-    parsed = format!(
-      concat!("{}", "Content-Type: {}\n", "Content-Length: {}\n", "\n{}"),
-      parsed,
+    return format!(
+      concat!("{}", "Content-Type: {}\n", "Content-Length: {}\n\n"),
+      start_line,
       parse_mime(&extension),
       length,
-      // todo: do not parse utf_8, it might be a binary data like image
-      from_utf8(&buffer).unwrap().to_string()
-    );
+    )
+    .into_bytes()
+    .into_iter()
+    .chain(buffer)
+    .collect::<Vec<u8>>();
   }
 
-  return parsed;
+  return start_line.into_bytes();
 }
 
 fn read_file(path: &str) -> Option<ReadFile> {
+  let path = Path::new(&path);
+
   let file = File::open(path).ok()?;
 
   let mut reader = BufReader::new(file);
 
   let mut buffer: Vec<u8> = vec![];
 
+  let extension = path.extension()?.to_str()?;
+
   if let Ok(length) = reader.read_to_end(&mut buffer) {
     let result = ReadFile {
       length,
       buffer,
-      extension: path.split(".").nth(1).unwrap().to_string(),
+      extension: String::from(extension),
     };
 
     return Some(result);
