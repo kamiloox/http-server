@@ -1,6 +1,6 @@
 use std::{
   fs::File,
-  io::{BufRead, BufReader, Read, Write},
+  io::{BufRead, BufReader, Error, ErrorKind, Read, Result, Write},
   net::{TcpListener, TcpStream},
   path::Path,
 };
@@ -9,40 +9,67 @@ fn main() {
   let listener = TcpListener::bind("0.0.0.0:8080").expect("cannot create a server");
 
   for stream in listener.incoming() {
-    if let Ok(stream) = stream {
-      handle_connection(stream);
+    if let Ok(mut stream) = stream {
+      let response_buffer = handle_connection(&stream);
+
+      if let Ok(buffer) = response_buffer {
+        stream.write_all(&buffer).unwrap();
+        stream.flush().unwrap();
+      }
     }
   }
 }
 
-fn handle_connection(mut stream: TcpStream) {
-  let reader = BufReader::new(&mut stream);
+fn handle_connection(stream: &TcpStream) -> Result<Vec<u8>> {
+  let request = get_request(&stream);
 
-  let request: Vec<_> = reader
-    .lines()
-    .map(|line| line.unwrap())
-    .take_while(|line| !line.is_empty())
-    .collect();
+  let Ok(request) = request else {
+    return Err(Error::new(ErrorKind::Other, "error"));
+  };
 
-  let asset = request.first().unwrap().split(" ").nth(1).unwrap();
+  let file = read_file(&format!("static{}", request.path));
 
-  let file = read_file(&format!("static{}", asset));
-
-  let response = match file {
-    Some(file) => prepare_response(Response {
+  return Ok(match file {
+    Some(file) => prepare_response_buffer(Response {
       file: Some(file),
       code: 200,
       status: String::from("OK"),
     }),
-    None => prepare_response(Response {
+    None => prepare_response_buffer(Response {
       file: read_file("static/404.html"),
       code: 404,
       status: String::from("NOT FOUND"),
     }),
-  };
+  });
+}
 
-  stream.write_all(&response).unwrap();
-  stream.flush().unwrap();
+struct Request {
+  path: String,
+}
+
+fn get_request(mut stream: &TcpStream) -> Result<Request> {
+  let reader = BufReader::new(&mut stream);
+
+  let request: Result<Vec<_>> = reader
+    .lines()
+    .map(|line| line.map_err(|e| Error::new(ErrorKind::Other, e)))
+    .take_while(|line| match line {
+      Ok(line) => !line.is_empty(),
+      Err(_) => true,
+    })
+    .collect();
+
+  let request = request?;
+  let path = request
+    .first()
+    .ok_or(Error::new(ErrorKind::Other, "error"))?
+    .split(" ")
+    .nth(1)
+    .ok_or(Error::new(ErrorKind::Other, "error"))?;
+
+  return Ok(Request {
+    path: path.to_string(),
+  });
 }
 
 #[derive(Debug)]
@@ -67,7 +94,7 @@ fn parse_mime(extension: &str) -> &'static str {
   };
 }
 
-fn prepare_response(response: Response) -> Vec<u8> {
+fn prepare_response_buffer(response: Response) -> Vec<u8> {
   let start_line = format!(concat!("HTTP/1.1 {} {}\n"), response.code, response.status);
 
   if let Some(ReadFile {
